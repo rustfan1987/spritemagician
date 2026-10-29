@@ -3,94 +3,16 @@
  * Works in browser using canvas and video/image elements
  */
 
-/**
- * Extract frames from a GIF URL
- */
+import { extractAnimatedImageFrames } from './animatedImageFrames.js';
+
+/** Extract a GIF animation, sampling evenly over its playback duration. */
 export async function extractFramesFromGif(gifUrl, maxFrames = 16) {
-	return new Promise(async (resolve, reject) => {
-		const timeout = setTimeout(() => reject(new Error('GIF extraction timed out')), 30000);
-		
-		try {
-			const img = new Image();
-			img.crossOrigin = 'anonymous';
-			
-			img.onload = () => {
-				clearTimeout(timeout);
-				const canvas = document.createElement('canvas');
-				canvas.width = img.width;
-				canvas.height = img.height;
-				const ctx = canvas.getContext('2d');
-				ctx.drawImage(img, 0, 0);
-				
-				const dataUrl = canvas.toDataURL('image/png');
-				// Duplicate frames to match expected count
-				const frames = Array(maxFrames).fill(dataUrl);
-				resolve(frames);
-			};
-			
-			img.onerror = () => {
-				clearTimeout(timeout);
-				reject(new Error('Failed to load GIF'));
-			};
-			
-			img.src = gifUrl;
-			
-		} catch (error) {
-			clearTimeout(timeout);
-			reject(error);
-		}
-	});
+	return extractAnimatedImageFrames(gifUrl, 'image/gif', maxFrames);
 }
 
-/**
- * Extract frames from an animated WebP URL.
- * 
- * Strategy:
- * 1. Try loading as a <video> (Chrome/Edge support WebP in <video> natively)
- * 2. Fall back to loading as <img> and capturing the visible frame
- * 3. If both fail, route through server proxy
- */
+/** Extract an animated WebP, sampling evenly over its playback duration. */
 export async function extractFramesFromWebP(webpUrl, numFrames = 8) {
-	// First try the video element path — Chrome can seek through animated WebP
-	try {
-		return await extractFramesFromVideo(webpUrl, numFrames);
-	} catch {
-		console.log('[WebP] Video path failed, trying image capture...');
-	}
-
-	// Fallback: load as image (only captures current/first frame)
-	return new Promise((resolve, reject) => {
-		const timeout = setTimeout(() => reject(new Error('WebP extraction timed out')), 30000);
-
-		const img = new Image();
-		img.crossOrigin = 'anonymous';
-
-		img.onload = () => {
-			clearTimeout(timeout);
-			try {
-				const canvas = document.createElement('canvas');
-				canvas.width = img.naturalWidth || img.width;
-				canvas.height = img.naturalHeight || img.height;
-				const ctx = canvas.getContext('2d');
-				ctx.drawImage(img, 0, 0);
-
-				const dataUrl = canvas.toDataURL('image/png');
-				// Duplicate the captured frame to fill the expected count
-				const frames = Array(numFrames).fill(dataUrl);
-				console.log(`[WebP] Captured first frame, duplicated to ${numFrames} frames`);
-				resolve(frames);
-			} catch (e) {
-				reject(new Error('CORS blocked WebP frame capture'));
-			}
-		};
-
-		img.onerror = () => {
-			clearTimeout(timeout);
-			reject(new Error('Failed to load animated WebP'));
-		};
-
-		img.src = webpUrl;
-	});
+	return extractAnimatedImageFrames(webpUrl, 'image/webp', numFrames);
 }
 
 /**

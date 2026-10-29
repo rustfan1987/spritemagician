@@ -33,6 +33,10 @@ npm run dev
 Open http://localhost:5173, click **Settings** and enter your keys.
 Data is stored in `~/SpriteMagician` in both modes.
 
+Animated GIF and WebP frame extraction requires a browser with WebCodecs
+`ImageDecoder` support. If decoding is unavailable,
+the app reports an error instead of treating a still image as an animation.
+
 Other scripts:
 
 | Command | What it does |
