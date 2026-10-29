@@ -50,8 +50,12 @@ export function setDoc(collection, id, data, { merge = false } = {}) {
 	const now = new Date().toISOString();
 	const prev = merge ? all[id] || {} : {};
 	const { id: _ignored, ...rest } = data || {};
+	const previous = all[id];
 	all[id] = { ...prev, ...rest, updatedAt: now, createdAt: prev.createdAt || rest.createdAt || now };
-	persist(collection);
+	try { persist(collection); } catch (error) {
+		if (previous === undefined) delete all[id]; else all[id] = previous;
+		throw error;
+	}
 	return { id, ...all[id] };
 }
 

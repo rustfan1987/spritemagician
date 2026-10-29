@@ -12,6 +12,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import * as db from './db.js';
 import {
 	relPathToAbs,
@@ -204,14 +205,49 @@ export function upsertFileByName(parentId, name, url, fileType = 'image', metada
 	)[0];
 	if (!existing) return { item: createFileFromUrl(parentId, name, url, fileType, metadata), replaced: false };
 
-	// Remove the old bytes first so the new file can take the same name.
-	if (existing.url && existing.url !== url) deleteLocalUrl(existing.url);
-	if (existing.thumbnailUrl) deleteLocalUrl(existing.thumbnailUrl);
-	const fresh = createFileFromUrl(parentId, name, url, fileType, metadata);
-	db.deleteDoc(COL, fresh.id);
-	const { id: _id, createdAt: _c, ...fields } = fresh;
-	const item = db.setDoc(COL, existing.id, fields, { merge: true });
-	return { item, replaced: true };
+	const { thumbnailUrl, size, ...rest } = metadata || {};
+	const oldPath = existing.url && isLocalUrl(existing.url) ? urlToAbs(existing.url) : null;
+	if (!isLocalUrl(url)) {
+		const item = db.setDoc(COL, existing.id, { name: wanted, parentId: parentId || null, isFolder: false, url, thumbnailUrl: thumbnailUrl || null, fileType, metadata: rest, size: size || null, relPath: null }, { merge: true });
+		if (existing.url && existing.url !== url) deleteLocalUrl(existing.url);
+		if (existing.thumbnailUrl && existing.thumbnailUrl !== item.thumbnailUrl) deleteLocalUrl(existing.thumbnailUrl);
+		return { item, replaced: true };
+	}
+	const incoming = urlToAbs(url);
+	if (!incoming || !fs.existsSync(incoming) || !fs.statSync(incoming).isFile()) throw new Error(`File not found: ${url}`);
+	const rel = joinRel(folderRelPath(parentId), wanted);
+	const target = relPathToAbs(rel);
+	if (fs.existsSync(target) && (!oldPath || !sameFile(target, oldPath)) && !sameFile(target, incoming)) {
+		throw new Error('A different file already occupies the replacement path');
+	}
+	const token = randomUUID();
+	const stage = path.join(path.dirname(target), `.replacement-${token}.tmp`);
+	const backup = path.join(path.dirname(target), `.replacement-backup-${token}-${path.basename(target)}`);
+	let backedUp = false, installed = false;
+	try {
+		if (!sameFile(incoming, target)) {
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			fs.copyFileSync(incoming, stage, fs.constants.COPYFILE_EXCL);
+			if (fs.existsSync(target)) { fs.copyFileSync(target, backup, fs.constants.COPYFILE_EXCL); backedUp = true; }
+			fs.renameSync(stage, target);
+			installed = true;
+		}
+		const item = db.setDoc(COL, existing.id, { name: wanted, parentId: parentId || null, isFolder: false, url: relPathToUrl(rel), thumbnailUrl: thumbnailUrl || null, fileType, metadata: rest, size: fs.statSync(target).size, relPath: rel }, { merge: true });
+		if (backedUp) { try { fs.unlinkSync(backup); } catch {} }
+		if (oldPath && !sameFile(oldPath, target)) deleteLocalUrl(existing.url);
+		if (!sameFile(incoming, target) && !db.listDocs(COL, (entry) => entry.url === url).length) deleteLocalUrl(url);
+		if (existing.thumbnailUrl && existing.thumbnailUrl !== item.thumbnailUrl) deleteLocalUrl(existing.thumbnailUrl);
+		return { item, replaced: true };
+	} catch (error) {
+		if (installed) {
+			try { if (backedUp) fs.renameSync(backup, target); else fs.unlinkSync(target); }
+			catch (restoreError) { throw new Error(`Replacement failed: ${error.message}. Original backup retained at ${backup}; restore failed: ${restoreError.message}`); }
+		}
+		throw error;
+	} finally {
+		try { if (fs.existsSync(stage)) fs.unlinkSync(stage); } catch {}
+		if (!installed && backedUp) { try { fs.unlinkSync(backup); } catch {} }
+	}
 }
 
 export function updateItem(id, updates) {
