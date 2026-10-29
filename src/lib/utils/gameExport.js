@@ -30,7 +30,7 @@ function alphaBounds(ctx, w, h) {
 	let minX = w, minY = h, maxX = -1, maxY = -1;
 	for (let y = 0; y < h; y++) {
 		for (let x = 0; x < w; x++) {
-			if (data[(y * w + x) * 4 + 3] > 8) {
+			if (data[(y * w + x) * 4 + 3] > 0) {
 				if (x < minX) minX = x;
 				if (x > maxX) maxX = x;
 				if (y < minY) minY = y;
@@ -53,6 +53,11 @@ export async function buildGameSheet(frames, opts = {}) {
 	const images = await Promise.all(frames.map(loadImage));
 	const srcW = images[0].naturalWidth;
 	const srcH = images[0].naturalHeight;
+	for (let i = 1; i < images.length; i++) {
+		if (images[i].naturalWidth !== srcW || images[i].naturalHeight !== srcH) {
+			throw new Error(`Frame ${i + 1} has different dimensions (${images[i].naturalWidth}×${images[i].naturalHeight}); all frames must match ${srcW}×${srcH} before game export`);
+		}
+	}
 
 	// Common crop across all frames so the sprite stays anchored.
 	let crop = { x: 0, y: 0, w: srcW, h: srcH };
