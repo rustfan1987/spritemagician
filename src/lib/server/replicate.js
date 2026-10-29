@@ -90,20 +90,31 @@ export async function toReplicateInput(ref) {
  * Create a prediction. Pass either `version` (hash) or `model` ("owner/name",
  * always latest version).
  */
-export async function createPrediction({ version, model, input, signal }) {
+export async function createPrediction({ version, model, input, signal, maxAttempts = 6 }) {
 	const url = model ? `${API}/models/${model}/predictions` : `${API}/predictions`;
 	const body = model ? { input } : { version: String(version).includes(':') ? version.split(':')[1] : version, input };
-	const res = await fetch(url, {
-		method: 'POST',
-		headers: authHeaders({ 'Content-Type': 'application/json' }),
-		body: JSON.stringify(body),
-		signal
-	});
-	if (!res.ok) {
+	for (let attempt = 1; ; attempt++) {
+		const res = await fetch(url, {
+			method: 'POST',
+			headers: authHeaders({ 'Content-Type': 'application/json' }),
+			body: JSON.stringify(body),
+			signal
+		});
+		if (res.ok) return res.json();
 		const text = await res.text();
+		// Accounts with little credit are throttled to one prediction at a time
+		// ("burst of 1"). Honour retry_after instead of failing the whole job.
+		if (res.status === 429 && attempt < maxAttempts) {
+			let wait = Number(res.headers.get('retry-after')) || 0;
+			try { wait = Number(JSON.parse(text)?.retry_after) || wait; } catch { /* not json */ }
+			const ms = Math.min(30_000, Math.max(2_000, (wait || 5) * 1000 + 500));
+			console.warn(`[replicate] 429 on create, retrying in ${ms} ms (attempt ${attempt}/${maxAttempts})`);
+			await new Promise((resolve) => setTimeout(resolve, ms));
+			if (signal?.aborted) throw new Error('Cancelled');
+			continue;
+		}
 		throw new Error(`Replicate request failed (${res.status}): ${text.slice(0, 500)}`);
 	}
-	return res.json();
 }
 
 export async function getPrediction(id, signal) {

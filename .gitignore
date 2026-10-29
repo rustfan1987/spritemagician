@@ -40,3 +40,7 @@ __pycache__/
 
 # Local run config
 .claude/launch.json
+
+# generated animation previews / cached cutouts
+out/
+*.cutout.png

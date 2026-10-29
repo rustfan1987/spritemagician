@@ -6,6 +6,12 @@
  *
  * Used by the Animate panel and by character batch generation so both
  * produce identical results from identical settings.
+ *
+ * AI AGENTS: the same pipeline exists headless in scripts/animate.mjs with a
+ * long header documenting framing margins, window selection, drift
+ * re-centring and static-frame removal that were learned by producing real
+ * batches. If you change framing or loop logic here, mirror it there (and
+ * vice versa). See AGENTS.md.
  */
 import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 import { pixelateFrames } from '$lib/utils/pixelate.js';

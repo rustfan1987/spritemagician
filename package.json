@@ -14,16 +14,17 @@
 		"check": "svelte-kit sync && svelte-check"
 	},
 	"devDependencies": {
+		"@sveltejs/adapter-node": "^5.2.12",
 		"@sveltejs/kit": "^2.50.1",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
 		"@tailwindcss/vite": "^4.1.18",
-		"svelte": "^5.48.2",
-		"tailwindcss": "^4.1.18",
-		"vite": "^7.3.1",
-		"@sveltejs/adapter-node": "^5.2.12",
+		"cross-env": "^10.0.0",
 		"electron": "^38.2.1",
 		"electron-builder": "^26.0.12",
-		"cross-env": "^10.0.0"
+		"sharp": "^0.35.5",
+		"svelte": "^5.48.2",
+		"tailwindcss": "^4.1.18",
+		"vite": "^7.3.1"
 	},
 	"dependencies": {
 		"@google/genai": "^1.40.0"

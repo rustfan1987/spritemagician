@@ -20,7 +20,7 @@ import { json } from '@sveltejs/kit';
 import { env } from '$lib/server/env.js';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
 import { resolveForProvider } from '$lib/server/localFiles.js';
-import { waitForPrediction, toReplicateInput } from '$lib/server/replicate.js';
+import { waitForPrediction, toReplicateInput, createPrediction } from '$lib/server/replicate.js';
 import { getPreference } from '$lib/server/settings.js';
 import { runVideoWorkflow, uploadImage as comfyUpload, snapFrameCount, loadWorkflow as loadComfyWorkflow } from '$lib/server/comfyui.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
@@ -88,11 +88,7 @@ async function runReplicateWan27(jobId, firstFrame, lastFrame, prompt, frameCoun
 		...(seed != null ? { seed } : {})
 	};
 	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: `Starting Wan 2.7 anchored I2V (${duration}s)...` });
-	const submit = await fetch('https://api.replicate.com/v1/models/wan-video/wan-2.7-i2v/predictions', {
-		method: 'POST', headers: { Authorization: `Token ${env.REPLICATE_API_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ input })
-	});
-	if (!submit.ok) throw new Error(`Wan 2.7 API error: ${await submit.text()}`);
-	let result = await submit.json();
+	let result = await createPrediction({ model: 'wan-video/wan-2.7-i2v', input });
 	result = await waitForPrediction(result, {
 		maxMs: 480_000,
 		onTick: (p, ms) => setProgress(jobId, { currentFrame: Math.min(Math.floor(ms / 8000), frameCount - 1), totalFrames: frameCount, status: 'processing', message: `Wan 2.7: ${p.status}... (${Math.round(ms / 1000)}s)` })
@@ -170,23 +166,7 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 
 	console.log('[FLF] Full input payload:', { ...inputPayload, start_image: '(url)', end_image: '(url)' });
 
-	const submitRes = await fetch('https://api.replicate.com/v1/predictions', {
-		method: 'POST',
-		headers: {
-			'Authorization': `Token ${REPLICATE_API_TOKEN}`,
-			'Content-Type': 'application/json'
-		},
-		body: JSON.stringify({
-			version: FLF_MODEL_VERSION,
-			input: inputPayload
-		})
-	});
-
-	if (!submitRes.ok) {
-		const errText = await submitRes.text();
-		console.error('[FLF] Submit error:', submitRes.status, errText);
-		throw new Error(`Replicate FLF submit error (${submitRes.status}): ${errText}`);
-	}
+	const submitRes = { ok: true, json: async () => createPrediction({ version: FLF_MODEL_VERSION, input: inputPayload }) };
 
 	const prediction = await submitRes.json();
 	console.log('[FLF] Prediction started:', prediction.id);
@@ -328,24 +308,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				...(seed !== null && { seed: seed })
 			};
 			
-			const response = await fetch('https://api.replicate.com/v1/predictions', {
-				method: 'POST',
-				headers: {
-					'Authorization': `Token ${env.REPLICATE_API_TOKEN}`,
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({
-					version: svdVersion.split(':')[1],
-					input: svdInput
-				})
-			});
-
-			if (!response.ok) {
-				const errorText = await response.text();
-				throw new Error(`Replicate API error: ${response.status} - ${errorText}`);
-			}
-
-			const prediction = await response.json();
+			const prediction = await createPrediction({ version: svdVersion, input: svdInput });
 			console.log('SVD prediction started:', prediction.id);
 
 			const svdResult = await waitForPrediction(prediction, {
@@ -463,32 +426,15 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		
 		console.log(`${model.name} params:`, { fps, motionAmount, frameCount, modelId });
 
-		let apiUrl, body;
-		
-		if (model.isModelPath) {
-			apiUrl = `https://api.replicate.com/v1/models/${model.version}/predictions`;
-			body = JSON.stringify({ input });
-		} else {
-			apiUrl = 'https://api.replicate.com/v1/predictions';
-			body = JSON.stringify({ version: model.version, input });
+		let prediction;
+		try {
+			prediction = model.isModelPath
+				? await createPrediction({ model: model.version, input })
+				: await createPrediction({ version: model.version, input });
+		} catch (error) {
+			console.error(`${model.name} API error:`, error.message);
+			throw new Error(`${model.name} API error: ${error.message}`);
 		}
-		
-		const response = await fetch(apiUrl, {
-			method: 'POST',
-			headers: {
-				'Authorization': `Token ${env.REPLICATE_API_TOKEN}`,
-				'Content-Type': 'application/json'
-			},
-			body: body
-		});
-
-		if (!response.ok) {
-			const error = await response.text();
-			console.error(`${model.name} API error:`, error);
-			throw new Error(`${model.name} API error: ${error}`);
-		}
-
-		const prediction = await response.json();
 		console.log(`${model.name} prediction started:`, prediction.id);
 		
 		const result = await waitForPrediction(prediction, {

@@ -1,4 +1,7 @@
 <script>
+	// AI AGENTS: a headless equivalent of this panel's generate → finalize flow
+	// lives in scripts/animate.mjs (documented step by step). Prefer it for
+	// batch work; keep framing/loop behaviour in sync with pipeline.js.
 	import { browser } from '$app/environment';
 	import { projectStore, updateFPS } from '$lib/stores/project.js';
 	import { poseStore } from '$lib/stores/poses.js';
