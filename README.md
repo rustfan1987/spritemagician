@@ -51,7 +51,8 @@ walk, attack, …) without touching the UI. It needs the app running and `ffmpeg
 node scripts/animate.mjs --image "static/Example images/image.png" \n  --actions "jump,hit,run_in_place_clean,walk_in_place_clean,attack_claw_swipe" --name scarecrow --seed 7
 ```
 
-Results land in the library folder `Characters/` plus preview GIFs in `out/anim/<name>/`.
+Add `--view side` for side-scroller sets (the sprite is redrawn in profile first), or `--generate "<prompt>"` to
+make the source character from text. Results land in the library folder `Characters/` plus preview GIFs in `out/anim/<name>/`.
 The script header and [AGENTS.md](AGENTS.md) explain every step and the pitfalls.
 
 ## API keys

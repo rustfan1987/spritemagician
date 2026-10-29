@@ -8,6 +8,7 @@
 	import FolderPicker from './FolderPicker.svelte';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { buildGameSheet, packReadme } from '$lib/utils/gameExport.js';
+	import { cropToAnimationBounds } from '$lib/utils/animationBounds.js';
 	
 	let project = $state({ frames: [], fps: 12 });
 	
@@ -38,6 +39,29 @@
 	let gameLoop = $state(true);
 	let isBuildingPack = $state(false);
 	let gamePackNote = $state('');
+
+	// Crop to animation bounds: one box for ALL frames (union of silhouettes + padding)
+	let boundsPadding = $state(6);
+	let isCropping = $state(false);
+	let cropNote = $state('');
+	async function cropWholeAnimation() {
+		if (!project.frames.length || isCropping) return;
+		isCropping = true;
+		cropNote = '';
+		try {
+			const { frames, box } = await cropToAnimationBounds(project.frames, {
+				padding: Math.max(0, Math.min(64, Number(boundsPadding) || 0)),
+				onProgress: (d, t) => (cropNote = `Measuring/cropping ${d}/${t}…`)
+			});
+			if (!box) { cropNote = 'No opaque pixels found (remove the background first).'; return; }
+			projectStore.update((prj) => ({ ...prj, frames, currentFrame: 0 }));
+			cropNote = `Cropped all ${frames.length} frames to ${box.w}×${box.h}.`;
+		} catch (err) {
+			cropNote = 'Crop failed: ' + (err?.message || err);
+		} finally {
+			isCropping = false;
+		}
+	}
 
 	function safeBaseName(name) {
 		return String(name || 'sprite').trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'sprite';
@@ -476,6 +500,21 @@
 					<option value={512}>512px</option>
 				</select>
 			</div>
+		</div>
+
+		<!-- Crop to animation bounds -->
+		<div class="bg-sky-50 border border-sky-200 rounded p-2 space-y-1.5">
+			<div class="flex items-center justify-between">
+				<p class="text-xs font-semibold text-sky-900">✂️ Crop to animation bounds</p>
+				<label class="text-[11px] text-sky-800 flex items-center gap-1">Padding
+					<input type="number" min="0" max="64" bind:value={boundsPadding} class="w-12 px-1 py-0.5 border rounded text-[11px]" /> px
+				</label>
+			</div>
+			<p class="text-[10px] text-sky-800">Measures every frame, takes the union box, and crops all frames to it. Nothing gets cut off and the character does not jitter.</p>
+			<button class="w-full px-2 py-1.5 text-xs rounded bg-sky-600 text-white hover:bg-sky-700 disabled:bg-gray-400" onclick={cropWholeAnimation} disabled={isCropping || !project.frames.length}>
+				{isCropping ? '⏳ Cropping…' : '✂️ Crop all frames to the animation'}
+			</button>
+			{#if cropNote}<p class="text-[10px] text-sky-800">{cropNote}</p>{/if}
 		</div>
 
 		<!-- Game-ready pack -->

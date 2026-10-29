@@ -197,7 +197,7 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 // Main async processor
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, perfectLoop = false, guidanceScale = null, seed = null, negativePrompt = null, flfOptions = {}, staticAssetMode = false) {
+async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, perfectLoop = false, guidanceScale = null, seed = null, negativePrompt = null, flfOptions = {}, staticAssetMode = false, wanOpts = {}) {
 	let isInterpolation = !!endImage;
 	if (staticAssetMode && !isInterpolation) {
 		// Hard-lock fallback: interpolate from the same frame when no end frame is provided.
@@ -403,6 +403,12 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				num_frames: wanFrames,
 				frames_per_second: WAN_NATIVE_FPS,
 				resolution: '480p',
+				// loopAnchor: condition the LAST frame on the input image too, so the
+				// clip ends where it started (cheap seamless loops, same price).
+				...(wanOpts.loopAnchor && { last_image: imageUrl }),
+				// sample_shift (default 12 on Replicate): lower = closer to the input
+				// image / less motion, higher = more motion. 8–12 is the useful band.
+				...(Number.isFinite(wanOpts.sampleShift) && { sample_shift: wanOpts.sampleShift }),
 				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'wan25') {
@@ -491,12 +497,14 @@ export async function POST({ request, locals }) {
 			referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, interpolate, 
 			perfectLoop, guidanceScale, seed, negativePrompt,
 			staticAssetMode,
+			// Wan 2.2 extras
+			loopAnchor, sampleShift,
 			// FLF-specific parameters (for interpolation mode)
 			flfDurationSeconds, flfInferenceSteps, flfGuidanceScale, flfGuidanceScale2, flfShift, flfSeed, flfNegativePrompt
 		} = await request.json();
 		const payload = {
 			referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, interpolate,
-			perfectLoop, guidanceScale, seed, negativePrompt, staticAssetMode,
+			perfectLoop, guidanceScale, seed, negativePrompt, staticAssetMode, loopAnchor, sampleShift,
 			flfDurationSeconds, flfInferenceSteps, flfGuidanceScale, flfGuidanceScale2, flfShift, flfSeed, flfNegativePrompt
 		};
 		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
@@ -594,7 +602,8 @@ export async function POST({ request, locals }) {
 			seed || null,
 			negativePrompt || null,
 			flfOptions,
-			!!staticAssetMode
+			!!staticAssetMode,
+			{ loopAnchor: !!loopAnchor, sampleShift: sampleShift === undefined || sampleShift === null ? undefined : Number(sampleShift) }
 		);
 
 		const responseBody = {

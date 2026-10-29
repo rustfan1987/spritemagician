@@ -42,11 +42,26 @@ export const POSE_PRESETS = [
 	{ id: 'death_forward_collapse', name: 'Death - Forward Collapse', group: 'Death', description: 'Death with forward collapse, posture folds, controlled fall, settles motionless' },
 	{ id: 'death_backward_fall', name: 'Death - Backward Fall', group: 'Death', description: 'Death with backward recoil, stagger, full backward fall, final stillness' },
 	{ id: 'death_arcane_dissolve', name: 'Death - Arcane Dissolve', group: 'Death', description: 'Arcane death: brief freeze, posture collapses while a subtle local dissolve effect plays' },
+	// ── Side-scroller set (profile view, character faces RIGHT) ───────────────
+	// Use with a profile sprite (see /api/reframe-sprite). Motion words follow the
+	// Wan 2.2 guidance that worked in testing: one subject, concrete body
+	// mechanics with speed and direction, an explicit end state, no scene talk.
+	{ id: 'side_idle', name: 'Side - Idle', group: 'Side-scroller', description: 'Profile view facing right. Idle breathing loop: slow chest rise and fall, slight knee flex, head steady, feet planted, then back to the exact starting pose', side: true },
+	{ id: 'side_walk', name: 'Side - Walk', group: 'Side-scroller', description: 'Profile view facing right. Walks in place at a steady, relaxed pace: legs alternate full strides, arms swing opposite to the legs, torso upright, feet return to the starting position', side: true },
+	{ id: 'side_run', name: 'Side - Run', group: 'Side-scroller', description: 'Profile view facing right. Runs in place with brisk, even cadence: knees drive high, arms pump, slight forward lean, head level, stays on the same spot', side: true },
+	{ id: 'side_jump', name: 'Side - Jump', group: 'Side-scroller', description: 'Profile view facing right. Crouches quickly, jumps straight up with arms rising, hangs at the top, lands softly with bent knees and stands back up in the exact starting pose', side: true },
+	{ id: 'side_hit', name: 'Side - Take Damage', group: 'Side-scroller', description: 'Profile view facing right. Takes a hit from the front: flinches, the head whips back to the left, eyes squeeze shut, shoulders hunch and the body bends backward, stumbles half a step to the left, then straightens up into the starting pose. Does not attack, no punching, no kicking', side: true },
+	{ id: 'side_attack', name: 'Side - Attack (unarmed)', group: 'Side-scroller', description: 'Profile view facing right. Winds up briefly, then swipes the right hand forward in a fast arc toward the right, body leans into the strike, then returns to the starting pose. No weapons', side: true },
+	{ id: 'side_attack_weapon', name: 'Side - Attack (weapon)', group: 'Side-scroller', description: 'Profile view facing right. Raises the weapon, swings it forward in a fast arc toward the right, follows through, then returns to the starting guard pose', side: true },
+	{ id: 'side_death', name: 'Side - Death', group: 'Side-scroller', description: 'Profile view facing right. Knees buckle, body folds forward and collapses to the ground toward the right, settles completely still', side: true },
 	{ id: 'custom', name: 'Custom', group: 'Custom', description: '' }
 ];
 
 /** The set offered for one-click character batches. */
 export const CHARACTER_ACTION_IDS = ['idle', 'walk_in_place_clean', 'run_in_place_clean', 'jump', 'attack', 'cast', 'hit', 'death'];
+
+/** Side-scroller presets, in the order a character batch should run them. */
+export const SIDE_ACTION_IDS = ['side_idle', 'side_walk', 'side_run', 'side_jump', 'side_hit', 'side_attack'];
 
 export function presetById(id) {
 	return POSE_PRESETS.find((p) => p.id === id) || null;
