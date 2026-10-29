@@ -57,6 +57,8 @@ node scripts/animate.mjs --image "static/Example images/image.png" \n  --actions
 
 Add `--view side` for side-scroller sets (the sprite is redrawn in profile first), or `--generate "<prompt>"` to
 make the source character from text. Results land in the library folder `Characters/` plus preview GIFs in `out/anim/<name>/`.
+Every action is scored with a loop check (last-to-first change divided by the normal frame step; 1 or under is a
+seamless loop) and gets a `seam-<action>.png` strip. The Export panel has the same **Loop check** button.
 The script header and [AGENTS.md](AGENTS.md) explain every step and the pitfalls.
 
 ## API keys

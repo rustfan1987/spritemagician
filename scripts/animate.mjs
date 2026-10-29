@@ -55,8 +55,21 @@
  *            (+ small bonus for longer loops, penalty for drift). Frames
  *            i..j−1 at native 16 fps are the loop. Re-centre each frame
  *            horizontally on the window's median centroid.
+ *      The pair search (v2) measures the seam AFTER the re-centring the output
+ *      gets, and scores it relative to the window's own median frame step, so
+ *      a fast run is not judged by the same absolute number as a slow idle.
+ *      That took the run seam from ratio 1.13 to 0.34.
  *      Seam blending is only applied when the seam is still rough (unmatched
  *      windows); blending a matched loop just ghosts the legs.
+ *
+ *   4b. LOOP CHECK (the proof). After the frames are final, compare the
+ *      last→first change with the ordinary frame-to-frame change:
+ *      ratio = seam / median step. ≤1 perfect, ≤1.5 good, ≤2.5 visible, else
+ *      broken. Printed per action, stored in results.json and in the saved
+ *      animation's metadata (loopCheck), and drawn as seam-<action>.png (last
+ *      3 frames | red bar | first 3). Same code as the Export panel's
+ *      "Loop check" (src/lib/utils/loopQuality.js). A bad verdict on a cycle
+ *      means the clip has no matching pair: change the SEED, not the script.
  *
  *   5. Frames: extract ALL native frames with ffmpeg (-vsync 0); never let
  *      ffmpeg resample. Crop back to the buffered rectangle, resize so the
@@ -120,6 +133,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { POSE_PRESETS, presetById } from '../src/lib/animation/presets.js';
+import { seamReport, rgbaToGrey, greyDiff } from '../src/lib/utils/loopQuality.js';
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 const args = Object.fromEntries(
@@ -315,7 +329,7 @@ async function analyzeFrames(framePaths, crop) {
 		out.push({
 			cx: sum ? (sxx / sum) * scale : crop.w / 2, cy: sum ? (syy / sum) * scale : crop.h / 2,
 			w: sum ? (maxX - minX + 1) * scale : 0, h: sum ? (maxY - minY + 1) * scale : 0,
-			small: data, area: sum
+			small: data, grey: rgbaToGrey(data), tw: info.width, th: info.height, scale, area: sum
 		});
 	}
 	return out;
@@ -324,6 +338,21 @@ function frameDiff(a, b) {
 	let d = 0;
 	for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) + Math.abs(a[i + 3] - b[i + 3]);
 	return d / (a.length / 4) / 4; // mean per-channel difference, 0..255
+}
+/**
+ * Greyscale diff of two thumbnails after shifting b horizontally by `shift`
+ * px, i.e. the diff the viewer will see AFTER the loop is re-centred. Pixels
+ * that fall off the edge are compared against the background (32).
+ */
+function greyDiffShift(a, b, w, shift) {
+	if (!shift) return greyDiff(a, b);
+	let s = 0; const h = a.length / w;
+	for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+		const xb = x + shift;
+		const vb = xb >= 0 && xb < w ? b[y * w + xb] : 32;
+		s += Math.abs(a[y * w + x] - vb);
+	}
+	return s / a.length;
 }
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
 const std = (xs) => { const m = xs.reduce((a, b) => a + b, 0) / xs.length; return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length); };
@@ -347,20 +376,33 @@ function pickWindow(analysis, mode, n, { minStart = 6, staticThreshold = 1.2, cr
 		// two). Frames i..j−1 are the loop; j is the same pose as i so it is
 		// dropped. Score = pixel diff + small bonus for longer loops + penalty
 		// for windows that drift. Native 16 fps is kept (no thinning).
-		const minLen = 12, maxLen = Math.min(40, total - 2);
+		//
+		// Two refinements (v2) that made the run seam read as a normal step:
+		//  • the seam is measured AFTER the horizontal re-centring the output
+		//    will get (greyDiffShift), because that is what the viewer sees;
+		//  • it is scored relative to the window's own median frame step
+		//    (seam / median step = the "ratio" in loopQuality.js), so a fast
+		//    run is not judged by the same absolute number as a slow idle.
+		const minLen = 12, maxLen = Math.min(48, total - 2);
+		const w = analysis[0].tw, px = analysis[0].scale; // canvas px per thumb px
+		const step = analysis.slice(1).map((f, k) => greyDiff(f.grey, analysis[k].grey)); // step[k] = k→k+1
 		let best = null;
 		for (let i = 2; i + minLen < total; i++) {
 			for (let j = i + minLen; j <= Math.min(total - 1, i + maxLen); j++) {
 				const win = analysis.slice(i, j);
-				const seam = frameDiff(analysis[i].small, analysis[j].small);
-				const drift = std(win.map((a) => a.cx)) * 0.05 + std(win.map((a) => a.h)) * 0.05;
-				const score = seam - (j - i) * 0.03 + drift;
-				if (!best || score < best.score) best = { i, j, score, seam };
+				const med = median(step.slice(i, j - 1)) || 1;
+				// the transition the loop will actually play is (j−1) → i, re-centred
+				const shift = Math.round((analysis[i].cx - analysis[j - 1].cx) / px);
+				const seam = greyDiffShift(analysis[j - 1].grey, analysis[i].grey, w, shift);
+				const ratio = seam / med;
+				const drift = std(win.map((a) => a.h)) / (analysis[i].h || 1); // height wobble = bobbing camera / scale drift
+				const score = ratio - (j - i) * 0.004 + drift * 2;
+				if (!best || score < best.score) best = { i, j, score, seam, ratio };
 			}
 		}
 		const idx = Array.from({ length: best.j - best.i }, (_, k) => best.i + k);
 		const cx0 = median(idx.map((i) => analysis[i].cx));
-		console.log(`         cycle loop: native ${best.i}..${best.j - 1} (${idx.length} frames), seam diff ${best.seam.toFixed(1)}`);
+		console.log(`         cycle loop: native ${best.i}..${best.j - 1} (${idx.length} frames), predicted seam ratio ${best.ratio.toFixed(2)}`);
 		return idx.map((i) => ({ index: i, dx: analysis[i].cx - cx0, native: true }));
 	}
 	if (loop === 'perfect') {
@@ -508,6 +550,32 @@ async function saveToLibrary(folderId, fileName, pngFrames, fps, prompt, meta) {
 	});
 	return { saved, item: indexed.item };
 }
+/** Loop check on raw RGBA frames ({data, info}): 128 px grey thumbnails → seamReport. */
+async function loopReport(frames) {
+	const greys = [];
+	for (const f of frames) {
+		const { data } = await sharp(f.data, { raw: f.info }).resize(128, null, { kernel: 'nearest' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+		greys.push(rgbaToGrey(data));
+	}
+	return seamReport(greys);
+}
+/** Seam strip PNG: last k frames | red divider | first k frames. */
+async function writeSeamStrip(pngs, outPath, k = 3) {
+	k = Math.min(k, Math.floor(pngs.length / 2)) || 1;
+	const picks = [...pngs.slice(-k), ...pngs.slice(0, k)];
+	const cell = 160, gap = 4;
+	const m = await sharp(picks[0]).metadata();
+	const ch = Math.round((cell * m.height) / m.width);
+	const width = picks.length * (cell + gap) + gap * 4, height = ch + gap * 2;
+	const layers = [];
+	let x = gap;
+	for (let i = 0; i < picks.length; i++) {
+		if (i === k) { layers.push({ input: { create: { width: gap * 2, height, channels: 4, background: '#ef4444' } }, left: x, top: 0 }); x += gap * 4; }
+		layers.push({ input: await sharp(picks[i]).resize(cell, ch, { kernel: 'nearest' }).png().toBuffer(), left: x, top: gap });
+		x += cell + gap;
+	}
+	await sharp({ create: { width, height, channels: 4, background: '#2a2a2a' } }).composite(layers).png().toFile(outPath);
+}
 function writeGif(framesDir, fps, outGif) {
 	// palette pass keeps transparency crisp
 	execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', path.join(framesDir, 'k_%04d.png'),
@@ -599,6 +667,12 @@ for (const actionId of ACTIONS) {
 		// to the source cutout with ONE per-channel affine transform (stats over
 		// all frames together, so nothing flickers).
 		colorMatch(frames, sourceStats);
+		// LOOP CHECK — the proof, not the pipeline's opinion. Compare the
+		// last→first change with the ordinary frame-to-frame change of the
+		// final frames (same code as the Export panel's "Loop check").
+		const loop = await loopReport(frames);
+		log(`  loop check: seam ${loop.seam.toFixed(1)} vs median step ${loop.median.toFixed(1)} (max ${loop.max.toFixed(1)}) → ratio ${loop.ratio.toFixed(2)} = ${loop.verdict.toUpperCase()}`);
+		if (loop.verdict === 'visible' || loop.verdict === 'broken') log(`  ⚠ ${info.mode === 'cycle' ? 'no matching frame pair in this clip — try another --seed' : 'clip did not return to the start pose — try another --seed or keep --anchor'}`);
 		const box = unionBox(frames.map(alphaBox));
 		const keyedDir = path.join(tmp, info.id + '-keyed');
 		fs.mkdirSync(keyedDir, { recursive: true });
@@ -607,7 +681,7 @@ for (const actionId of ACTIONS) {
 		}
 		const touchesEdge = box && (box.x0 === 0 || box.y0 === 0 || box.x1 === outW || box.y1 === outH);
 		if (touchesEdge) log(`  ⚠ silhouette touches the crop edge in some frame — raise MARGIN or lower FILL and re-run`);
-		done.push({ info, seed, prompt, keyedDir, count: frames.length, fps, box, videoUrl });
+		done.push({ info, seed, prompt, keyedDir, count: frames.length, fps, box, videoUrl, loop });
 	} catch (err) {
 		log(`  ✖ ${info.id}: ${err.message}`);
 		results.push({ action: info.id, error: err.message, seed });
@@ -635,10 +709,14 @@ if (setBox) {
 		}
 		const gif = path.join(OUT_DIR, `${NAME}-${d.info.id}.gif`);
 		writeGif(croppedDir, d.fps, gif);
+		// Seam strip: last 3 frames | red bar | first 3 frames. Read it left to
+		// right as one motion; a loop is right when the bar is invisible.
+		await writeSeamStrip(pngs, path.join(OUT_DIR, `seam-${d.info.id}.png`));
+		const loop = { ...d.loop, steps: undefined, seam: +d.loop.seam.toFixed(2), median: +d.loop.median.toFixed(2), max: +d.loop.max.toFixed(2), ratio: +d.loop.ratio.toFixed(2) };
 		try {
-			const { item } = await saveToLibrary(folderId, `${NAME}-${d.info.id}`, pngs, d.fps, d.prompt, { seed: d.seed, pose: d.info.id, loop: LOOP, source: 'scripts/animate.mjs' });
-			log(`  ✔ saved ${item?.name} (${pngs.length} frames @ ${d.fps} fps, ${bw}×${bh}) · preview ${gif}`);
-			results.push({ action: d.info.id, mode: d.info.mode, seed: d.seed, frames: pngs.length, fps: d.fps, size: `${bw}x${bh}`, file: item?.name, gif, videoUrl: d.videoUrl });
+			const { item } = await saveToLibrary(folderId, `${NAME}-${d.info.id}`, pngs, d.fps, d.prompt, { seed: d.seed, pose: d.info.id, loop: LOOP, loopCheck: loop, source: 'scripts/animate.mjs' });
+			log(`  ✔ saved ${item?.name} (${pngs.length} frames @ ${d.fps} fps, ${bw}×${bh}, loop ${loop.verdict}) · preview ${gif}`);
+			results.push({ action: d.info.id, mode: d.info.mode, seed: d.seed, frames: pngs.length, fps: d.fps, size: `${bw}x${bh}`, loop, file: item?.name, gif, videoUrl: d.videoUrl });
 		} catch (err) {
 			log(`  ✖ save ${d.info.id}: ${err.message}`);
 			results.push({ action: d.info.id, error: err.message, seed: d.seed, gif });

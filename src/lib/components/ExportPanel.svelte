@@ -9,6 +9,7 @@
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { buildGameSheet, packReadme, relinkGameSheet } from '$lib/utils/gameExport.js';
 	import { cropToAnimationBounds } from '$lib/utils/animationBounds.js';
+	import { measureLoopQuality, buildSeamStrip } from '$lib/utils/loopQuality.js';
 	
 	let project = $state({ frames: [], fps: 12 });
 	
@@ -60,6 +61,26 @@
 			cropNote = 'Crop failed: ' + (err?.message || err);
 		} finally {
 			isCropping = false;
+		}
+	}
+
+	// Loop check: is the last→first change no bigger than a normal frame step?
+	// Same maths as scripts/animate.mjs (src/lib/utils/loopQuality.js).
+	let isCheckingLoop = $state(false);
+	let loopResult = $state(null);
+	let seamStrip = $state('');
+	const VERDICT_STYLE = { perfect: 'bg-green-600', good: 'bg-lime-600', visible: 'bg-amber-500', broken: 'bg-red-600' };
+	async function checkLoop() {
+		if (!project.frames.length || isCheckingLoop) return;
+		isCheckingLoop = true;
+		loopResult = null; seamStrip = '';
+		try {
+			loopResult = await measureLoopQuality(project.frames);
+			seamStrip = await buildSeamStrip(project.frames);
+		} catch (err) {
+			loopResult = { verdict: 'error', error: err?.message || String(err) };
+		} finally {
+			isCheckingLoop = false;
 		}
 	}
 
@@ -518,6 +539,29 @@
 				{isCropping ? '⏳ Cropping…' : '✂️ Crop all frames to the animation'}
 			</button>
 			{#if cropNote}<p class="text-[10px] text-sky-800">{cropNote}</p>{/if}
+		</div>
+
+		<!-- Loop check -->
+		<div class="bg-violet-50 border border-violet-200 rounded p-2 space-y-1.5">
+			<div class="flex items-center justify-between">
+				<p class="text-xs font-semibold text-violet-900">🔁 Loop check</p>
+				{#if loopResult?.ratio !== undefined}
+					<span class="text-[10px] font-semibold text-white px-1.5 py-0.5 rounded {VERDICT_STYLE[loopResult.verdict] || 'bg-gray-500'}">{loopResult.verdict}</span>
+				{/if}
+			</div>
+			<p class="text-[10px] text-violet-800">Compares the jump from the last frame back to the first with the normal frame-to-frame change. A ratio at or under 1 means the seam is invisible.</p>
+			<button class="w-full px-2 py-1.5 text-xs rounded bg-violet-600 text-white hover:bg-violet-700 disabled:bg-gray-400" onclick={checkLoop} disabled={isCheckingLoop || project.frames.length < 2}>
+				{isCheckingLoop ? '⏳ Measuring…' : '🔁 Check the loop seam'}
+			</button>
+			{#if loopResult?.error}
+				<p class="text-[10px] text-red-700">{loopResult.error}</p>
+			{:else if loopResult?.ratio !== undefined}
+				<p class="text-[10px] text-violet-900 font-mono">seam {loopResult.seam.toFixed(1)} · median step {loopResult.median.toFixed(1)} · max step {loopResult.max.toFixed(1)} · ratio {Number.isFinite(loopResult.ratio) ? loopResult.ratio.toFixed(2) : '∞'}</p>
+				{#if seamStrip}
+					<img src={seamStrip} alt="Last three frames, then the first three" class="w-full rounded border border-violet-200" style="image-rendering: pixelated" />
+					<p class="text-[10px] text-violet-700">Last 3 frames | first 3 frames. Read left to right as one motion.</p>
+				{/if}
+			{/if}
 		</div>
 
 		<!-- Game-ready pack -->

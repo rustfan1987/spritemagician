@@ -30,8 +30,10 @@ generated source, $0.04 for a reframe, $0.002 for one background removal.
    transparent? Already a profile? Write the `--subject` line from what you
    see (2–4 identifying features). Pick presets that match; never mention
    props the sprite does not have.
-2. **Run one action first**, build a contact sheet AND a seam strip (last 3
-   frames next to the first 3) and look at both before spending on the rest:
+2. **Run one action first** and read its `loop check` line (ratio ≤ 1 is a
+   perfect seam; the script also writes `seam-<action>.png`, last 3 frames |
+   first 3). Build a contact sheet too and look at both before spending on
+   the rest:
    ```bash
    ffmpeg -y -i out/anim/hero/hero-side_walk.gif -vf "scale=100:-1,tile=12x4:padding=3:color=0x777777" sheet.png
    ```
@@ -50,7 +52,10 @@ generated source, $0.04 for a reframe, $0.002 for one background removal.
 One-shots (jump, hit, attack) are generated with `last_image` = the input, so
 the clip ends on the start pose and the whole clip is the loop. Cycles (walk,
 run, idle) must NOT be anchored; the script finds the two best-matching frames
-a stride apart and loops between them at native 16 fps. Colours are matched
+a stride or two apart (measured after re-centring, relative to the clip's own
+frame step) and loops between them at native 16 fps. Every action then gets a
+loop check: seam change ÷ median frame step, with the verdict in
+`results.json` and the saved `.anim.json` metadata (`loopCheck`). Colours are matched
 back to the source, and the whole set is cropped to one union box so nothing
 is cut off and every action shares a canvas.
 
@@ -68,6 +73,7 @@ attack*, cast*. death* does not loop.
 - `POST /api/reframe-sprite` — FLUX Kontext: side / back / front / three-quarter view of a sprite.
 - `POST /api/generate-animation` extras: `loopAnchor` (last_image = input), `sampleShift`.
 - Export panel → "Crop to animation bounds" (`src/lib/utils/animationBounds.js`).
+- Export panel → "Loop check" seam ratio + seam strip (`src/lib/utils/loopQuality.js`, shared with the script).
 
 ### Known limits (as of 2026-10-28)
 
