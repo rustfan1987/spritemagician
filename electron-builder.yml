@@ -16,6 +16,8 @@ extraResources:
 asar: true
 asarUnpack:
   - build/**
+  - node_modules/sharp/**
+  - node_modules/@img/**
 win:
   target:
     - nsis

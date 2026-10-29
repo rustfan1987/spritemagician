@@ -25,7 +25,10 @@ function sanitize(c) {
 			canvasPadding: Math.max(0, Math.min(512, Number(c.style?.canvasPadding) || 0)),
 			fps: Math.max(4, Math.min(24, Number(c.style?.fps) || 12)),
 			duration: Math.max(1, Math.min(10, Number(c.style?.duration) || 3)),
-			loopMode: ['none', 'pingpong', 'perfect'].includes(c.style?.loopMode) ? c.style.loopMode : 'perfect'
+			loopMode: ['none', 'pingpong', 'perfect'].includes(c.style?.loopMode) ? c.style.loopMode : 'perfect',
+			subject: String(c.style?.subject || '').slice(0, 300),
+			view: c.style?.view === 'side' ? 'side' : 'front',
+			reframe: c.style?.reframe !== false
 		},
 		actions: Array.isArray(c.actions) ? c.actions.slice(0, 40) : []
 	};

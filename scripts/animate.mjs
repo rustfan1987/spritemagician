@@ -6,9 +6,11 @@
  * │ NOTES FOR AI AGENTS (read this before automating animations)            │
  * └──────────────────────────────────────────────────────────────────────────┘
  *
- * This script reproduces what the Animate panel does in the browser, but from
- * Node, against a running Sprite Magician server (npm run dev, or the
- * Electron app). Everything below was learned by producing real batches (a
+ * The same pipeline now runs INSIDE the app (src/lib/server/perfectLoop.js,
+ * POST /api/perfect-loop, the Animate tab's "Perfect loops" mode). This script
+ * is the headless twin for batch work and experiments, against a running
+ * Sprite Magician server (npm run dev, or the Electron app). Keep the two in
+ * sync when you change framing or loop logic. Everything below was learned by producing real batches (a
  * front-view scarecrow, then a side-scroller anime girl) and looking at every
  * frame. Keep the order; each step exists because skipping it produced a
  * visible defect.

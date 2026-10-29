@@ -6,9 +6,12 @@ no cloud database: everything lives under `~/SpriteMagician` (override with
 
 ## Automating "sprite → set of looping animations"
 
-This is the most common agent task. The whole recipe is implemented and
-documented in **`scripts/animate.mjs`**. Read its header comment first; it
-records what worked, what failed, and why. Short version (side-scroller set):
+This is the most common agent task. The whole recipe lives on the server in
+**`src/lib/server/perfectLoop.js`** and is exposed as `POST /api/perfect-loop`
+(the Animate tab's "Perfect loops" mode and the Characters batch both call it;
+there are no knobs to get wrong). `scripts/animate.mjs` is the headless
+equivalent and its header records what worked, what failed, and why. Short
+version (side-scroller set):
 
 ```bash
 # server must be running: npm run dev   (or the Electron app)
@@ -74,6 +77,7 @@ attack*, cast*. death* does not loop.
 - `POST /api/generate-animation` extras: `loopAnchor` (last_image = input), `sampleShift`.
 - Export panel → "Crop to animation bounds" (`src/lib/utils/animationBounds.js`).
 - Export panel → "Loop check" seam ratio + seam strip (`src/lib/utils/loopQuality.js`, shared with the script).
+- `POST /api/perfect-loop` — the whole pipeline as one job: `{ image, actions, subject, view, reframe, seed, name, folderId, replace }` → `{ jobId }`, poll `/api/generation-progress` (`actions[]` carry status + loop check; `results[]` the saved files). Needs ffmpeg on PATH (or `FFMPEG_PATH`).
 
 ### Known limits (as of 2026-10-28)
 

@@ -8,7 +8,7 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { createFile, notifyLibraryChanged } from '$lib/library/client.js';
-	import { POSE_PRESETS, CHARACTER_ACTION_IDS, presetById } from '$lib/animation/presets.js';
+	import { POSE_PRESETS, CHARACTER_ACTION_IDS, SIDE_ACTION_IDS, presetById } from '$lib/animation/presets.js';
 	import { finalizeVideo, waitForJob, buildWanPrompt } from '$lib/animation/pipeline.js';
 	import { prepareWanInput } from '$lib/animation/wanCanvas.js';
 	import { clampImageLongEdge } from '$lib/utils/imagePrep.js';
@@ -25,7 +25,7 @@
 	projectStore.subscribe((v) => (project = v));
 
 	const selected = $derived(characters.find((c) => c.id === selectedId) || null);
-	const actionPresets = POSE_PRESETS.filter((p) => p.id !== 'custom');
+	const actionPresets = $derived(POSE_PRESETS.filter((p) => p.id !== 'custom' && !p.id.startsWith('bust_') && (!!p.side === ((selected?.style?.view || 'front') === 'side'))));
 
 	async function api(action, payload = {}) {
 		const res = await fetch('/api/characters', {
@@ -118,7 +118,53 @@
 		return selected?.actions?.find((a) => a.id === id) || null;
 	}
 
-	/** Generate one action for the selected character with its locked settings. */
+	/**
+	 * Perfect loops for the whole checked set in ONE server job
+	 * (/api/perfect-loop): framing, Wan 2.2, loop matching, keying, colour
+	 * match, loop check, union crop, save. Same code path as the Animate tab.
+	 */
+	let batchProgress = $state(null);
+	const VERDICT = { perfect: 'bg-green-600', good: 'bg-lime-600', visible: 'bg-amber-500', broken: 'bg-red-600' };
+	async function generatePerfectSet(c, presets) {
+		const qid = jobQueue.addJob({ type: 'Animation', kind: 'animation', origin: 'character', name: `${c.name} · ${presets.length} perfect loops`, status: 'processing', message: 'Starting…' });
+		for (const p of presets) await setAction(p.id, { status: 'running', error: null });
+		try {
+			const res = await fetch('/api/perfect-loop', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					image: c.referenceUrl, actions: presets.map((p) => p.id), subject: c.style.subject || '', view: c.style.view || 'front',
+					reframe: c.style.view === 'side' && c.style.reframe !== false, seed: c.seed, name: c.name, folderId: c.folderId, replace: true
+				})
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.error || 'Could not start');
+			const finished = await new Promise((resolve, reject) => {
+				const timer = setInterval(async () => {
+					try {
+						const r = await fetch(`/api/generation-progress?jobId=${encodeURIComponent(data.jobId)}`);
+						if (!r.ok) return;
+						const pr = await r.json();
+						batchProgress = pr;
+						jobQueue.updateJob(qid, { message: pr.message, progress: pr.totalFrames ? Math.round((pr.currentFrame / pr.totalFrames) * 100) : 0 });
+						if (pr.status === 'completed') { clearInterval(timer); resolve(pr); }
+						else if (pr.status === 'error') { clearInterval(timer); reject(new Error(pr.message || 'Failed')); }
+					} catch { /* keep polling */ }
+				}, 2000);
+			});
+			for (const a of finished.actions || []) {
+				if (a.status === 'done') await setAction(a.id, { status: 'done', fileId: a.fileId, frameCount: a.frames, thumbnailUrl: a.thumbnailUrl, loop: a.loop, error: null });
+				else await setAction(a.id, { status: 'failed', error: a.error || 'failed' });
+			}
+			notifyLibraryChanged();
+			jobQueue.completeJob(qid, { frameCount: finished.results?.length || 0 });
+		} catch (err) {
+			for (const p of presets) await setAction(p.id, { status: 'failed', error: err.message });
+			jobQueue.failJob(qid, err.message);
+			error = err.message;
+		}
+	}
+
+	/** Manual per-action path (kept for the legacy settings). */
 	async function generateAction(c, preset) {
 		const style = c.style;
 		const qid = jobQueue.addJob({ type: 'Animation', kind: 'animation', origin: 'character', name: `${c.name} · ${preset.name}`, status: 'processing', message: 'Preparing...' });
@@ -189,15 +235,7 @@
 		running = true;
 		error = '';
 		const todo = actionPresets.filter((p) => checked.has(p.id));
-		// Two at a time keeps the provider happy and the UI responsive.
-		const queue = [...todo];
-		const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
-			while (queue.length) {
-				const preset = queue.shift();
-				await generateAction(selected, preset);
-			}
-		});
-		await Promise.all(workers);
+		await generatePerfectSet(selected, todo);
 		running = false;
 	}
 
@@ -244,37 +282,19 @@
 				<button class="text-red-600 hover:underline text-[10px]" onclick={() => remove(selected)} disabled={running}>Delete</button>
 			</div>
 
-			<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-700">
-				<label class="flex items-center justify-between gap-2">Loop
-					<select class="border rounded px-1 py-0.5" value={selected.style.loopMode} onchange={(e) => updateStyle({ loopMode: e.currentTarget.value })}>
-						<option value="perfect">Perfect (FLF)</option>
-						<option value="pingpong">Ping-pong</option>
-						<option value="none">None</option>
+			<div class="grid grid-cols-1 gap-y-1 text-[11px] text-gray-700">
+				<label>Who is this? <span class="text-gray-400">(2–4 features, optional)</span>
+					<input type="text" class="w-full border rounded px-2 py-1 mt-0.5" placeholder="a knight in blue armor with a red plume" value={selected.style.subject || ''} onchange={(e) => updateStyle({ subject: e.currentTarget.value })} disabled={running} />
+				</label>
+				<label class="flex items-center justify-between gap-2">View
+					<select class="border rounded px-1 py-0.5" value={selected.style.view || 'front'} onchange={(e) => { updateStyle({ view: e.currentTarget.value }); checked = new Set(e.currentTarget.value === 'side' ? SIDE_ACTION_IDS : CHARACTER_ACTION_IDS); }} disabled={running}>
+						<option value="front">Front / as drawn</option>
+						<option value="side">Side-scroller (profile →)</option>
 					</select>
 				</label>
-				<label class="flex items-center justify-between gap-2">FPS
-					<select class="border rounded px-1 py-0.5" value={selected.style.fps} onchange={(e) => updateStyle({ fps: Number(e.currentTarget.value) })}>
-						{#each [6, 8, 10, 12, 16] as f}<option value={f}>{f}</option>{/each}
-					</select>
-				</label>
-				<label class="flex items-center justify-between gap-2">Seconds
-					<input type="number" min="1" max="7" step="0.5" class="w-14 border rounded px-1 py-0.5" value={selected.style.duration} onchange={(e) => updateStyle({ duration: Number(e.currentTarget.value) })} />
-				</label>
-				<label class="flex items-center gap-1"><input type="checkbox" checked={selected.style.removeBackground} onchange={(e) => updateStyle({ removeBackground: e.currentTarget.checked })} /> Remove background</label>
-				<label class="flex items-center gap-1"><input type="checkbox" checked={selected.style.pixelate} onchange={(e) => updateStyle({ pixelate: e.currentTarget.checked })} /> Pixel-art pass</label>
-				{#if selected.style.pixelate}
-					<label class="flex items-center justify-between gap-2">Pixel size
-						<input type="number" min="1" max="16" class="w-14 border rounded px-1 py-0.5" value={selected.style.pixelSize} onchange={(e) => updateStyle({ pixelSize: Number(e.currentTarget.value) })} />
-					</label>
-					<label class="flex items-center justify-between gap-2">Colors
-						<select class="border rounded px-1 py-0.5" value={selected.style.colorLevels} onchange={(e) => updateStyle({ colorLevels: Number(e.currentTarget.value) })}>
-							{#each [4, 8, 16, 32, 64] as n}<option value={n}>{n}</option>{/each}
-						</select>
-					</label>
+				{#if (selected.style.view || 'front') === 'side'}
+					<label class="flex items-center gap-1"><input type="checkbox" checked={selected.style.reframe !== false} onchange={(e) => updateStyle({ reframe: e.currentTarget.checked })} disabled={running} /> Redraw the reference in side profile first (+$0.04)</label>
 				{/if}
-				<label class="flex items-center justify-between gap-2">Padding px
-					<input type="number" min="0" max="256" class="w-14 border rounded px-1 py-0.5" value={selected.style.canvasPadding} onchange={(e) => updateStyle({ canvasPadding: Number(e.currentTarget.value) })} />
-				</label>
 			</div>
 		</div>
 
@@ -297,6 +317,7 @@
 						{/if}
 						<span class="flex-1 truncate" title={preset.description}>{preset.name}</span>
 						{#if st?.status === 'done'}
+							{#if st.loop?.verdict}<span class="text-[10px] text-white px-1.5 rounded {VERDICT[st.loop.verdict] || 'bg-gray-500'}" title="seam ÷ median step = {st.loop.ratio}">{st.loop.verdict}</span>{/if}
 							<span class="text-green-700 text-[10px]">✓ {st.frameCount} frames</span>
 						{:else if st?.status === 'running'}
 							<span class="text-blue-700 text-[10px]">running…</span>
@@ -306,7 +327,8 @@
 					</div>
 				{/each}
 			</div>
-			<p class="text-[10px] text-gray-500">Each action uses the same seed, canvas prep and post-processing, and lands in Characters/{selected.name}/ as an .anim.json you can open from the File Tree.</p>
+			{#if running && batchProgress?.message}<p class="text-[10px] text-blue-700">{batchProgress.message}</p>{/if}
+			<p class="text-[10px] text-gray-500">One job, same seed for every action: framing, Wan 2.2, seamless loop matching, keying, colour match, loop check and one shared crop. Files land in Characters/{selected.name}/ (≈$0.05 per action).</p>
 		</div>
 	{:else if characters.length === 0}
 		<p class="text-gray-500">No characters yet. Load a sprite in Animate, then create one here to batch-generate idle, walk, run, attack, cast, hit and death.</p>

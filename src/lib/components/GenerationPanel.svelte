@@ -10,7 +10,8 @@
 	import FrameUpload from './FrameUpload.svelte';
 	import { finalizeVideo, waitForJob, buildWanPrompt } from '$lib/animation/pipeline.js';
 	import { prepareWanInput } from '$lib/animation/wanCanvas.js';
-	import { POSE_PRESETS } from '$lib/animation/presets.js';
+	import { POSE_PRESETS, SIDE_ACTION_IDS, CHARACTER_ACTION_IDS, presetById } from '$lib/animation/presets.js';
+	import { notifyLibraryChanged } from '$lib/library/client.js';
 	import { onMount } from 'svelte';
 	import { clampImageLongEdge } from '$lib/utils/imagePrep.js';
 	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
@@ -27,6 +28,113 @@
 		project = value;
 	});
 	
+	// ── Perfect loops (default mode) ─────────────────────────────────────────
+	// One button runs the whole pipeline on the server (src/lib/server/perfectLoop.js):
+	// canvas framing → Wan 2.2 → loop matching → chroma key → colour match →
+	// loop check → union crop → saved to the library. No knobs to get wrong.
+	let costPerClipUsd = $state(0.05);
+	const PL_STATE_KEY = 'spritemagician.animate.perfect.v1';
+	let mode = $state('perfect'); // 'perfect' | 'manual'
+	let plSubject = $state('');
+	let plView = $state('front'); // 'front' | 'side'
+	let plReframe = $state(true); // side: redraw the sprite in profile first
+	let plSeed = $state(null);
+	let plName = $state('');
+	let plChecked = $state(new Set());
+	let plCustom = $state('');
+	let plRunning = $state(false);
+	let plError = $state('');
+	let plProgress = $state(null);
+	let plResults = $state([]);
+	let plPoll = null;
+	const PL_VERDICT = { perfect: 'bg-green-600', good: 'bg-lime-600', visible: 'bg-amber-500', broken: 'bg-red-600' };
+	const plSets = $derived(plView === 'side'
+		? POSE_PRESETS.filter((p) => p.side)
+		: POSE_PRESETS.filter((p) => !p.side && p.id !== 'custom' && !p.id.startsWith('bust_')));
+	const plGroups = $derived([...new Set(plSets.map((p) => p.group))]);
+	const plCost = $derived((plChecked.size + (plCustom.trim() ? 1 : 0)) * costPerClipUsd + (plView === 'side' && plReframe ? 0.04 : 0));
+
+	function plDefaults() {
+		plChecked = new Set(plView === 'side' ? SIDE_ACTION_IDS : CHARACTER_ACTION_IDS.filter((id) => id !== 'death'));
+	}
+	function plToggle(id) {
+		const next = new Set(plChecked);
+		next.has(id) ? next.delete(id) : next.add(id);
+		plChecked = next;
+	}
+	function plSave() {
+		if (!browser) return;
+		try { localStorage.setItem(PL_STATE_KEY, JSON.stringify({ mode, plSubject, plView, plReframe, plName, checked: [...plChecked] })); } catch { /* ignore */ }
+	}
+	if (browser) {
+		try {
+			const s = JSON.parse(localStorage.getItem(PL_STATE_KEY) || 'null');
+			if (s) {
+				if (s.mode === 'manual' || s.mode === 'perfect') mode = s.mode;
+				if (typeof s.plSubject === 'string') plSubject = s.plSubject;
+				if (s.plView === 'side' || s.plView === 'front') plView = s.plView;
+				if (typeof s.plReframe === 'boolean') plReframe = s.plReframe;
+				if (typeof s.plName === 'string') plName = s.plName;
+				if (Array.isArray(s.checked) && s.checked.length) plChecked = new Set(s.checked);
+			}
+		} catch { /* ignore */ }
+	}
+	if (!plChecked.size) plDefaults();
+
+	async function runPerfectLoops() {
+		if (!project.firstFrame || plRunning) return;
+		const actions = [...plChecked].filter((id) => presetById(id));
+		if (plCustom.trim()) actions.push({ id: plCustom.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 24), text: plCustom.trim() });
+		if (!actions.length) { plError = 'Pick at least one action.'; return; }
+		plRunning = true; plError = ''; plResults = []; plProgress = { status: 'starting', message: 'Starting…', actions: [] };
+		plSave();
+		try {
+			const res = await fetch('/api/perfect-loop', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					image: project.firstFrame, actions, subject: plSubject, view: plView, reframe: plView === 'side' && plReframe,
+					seed: plSeed ?? undefined, name: plName || project.projectName || 'sprite', replace: true
+				})
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.error || 'Could not start');
+			const qid = jobQueue.addJob({ type: 'Animation', kind: 'animation', origin: 'perfect-loop', name: `Perfect loops × ${actions.length}`, status: 'processing', message: 'Starting…' });
+			await new Promise((resolve, reject) => {
+				plPoll = setInterval(async () => {
+					try {
+						const r = await fetch(`/api/generation-progress?jobId=${encodeURIComponent(data.jobId)}`);
+						if (!r.ok) return;
+						const p = await r.json();
+						plProgress = p;
+						jobQueue.updateJob(qid, { message: p.message, progress: p.totalFrames ? Math.round((p.currentFrame / p.totalFrames) * 100) : 0 });
+						if (p.status === 'completed') { clearInterval(plPoll); jobQueue.completeJob(qid, { frameCount: p.results?.length || 0 }); resolve(p); }
+						else if (p.status === 'error') { clearInterval(plPoll); jobQueue.failJob(qid, p.message); reject(new Error(p.message || 'Failed')); }
+					} catch { /* keep polling */ }
+				}, 2000);
+			});
+			plResults = plProgress.results || [];
+			notifyLibraryChanged();
+			if (plResults[0]) await loadResult(plResults[0]);
+		} catch (err) {
+			plError = err.message;
+		} finally {
+			clearInterval(plPoll);
+			plRunning = false;
+		}
+	}
+
+	/** Load a finished animation into the project (Preview / Export). */
+	async function loadResult(r) {
+		try {
+			const res = await fetch(`/api/load-animation?url=${encodeURIComponent(r.url)}`);
+			const data = await res.json();
+			if (!res.ok || !data.frames?.length) throw new Error(data.error || 'Could not load');
+			projectStore.update((p) => ({ ...p, frames: data.frames, fps: data.fps || 12, currentFrame: 0, projectName: data.name || p.projectName, _animationLoaded: true }));
+		} catch (err) {
+			plError = err.message;
+		}
+	}
+
 	let prompt = $state('');
 	let isGenerating = $state(false);
 	let generationError = $state(null);
@@ -97,7 +205,6 @@
 	// Batch + canvas options
 	let seedCount = $state(1); // 1 | 2 | 4 parallel seeds
 	let useWanCanvas = $state(true); // paint sprite on a 832×480 chroma canvas, crop back after
-	let costPerClipUsd = $state(0.05);
 	let batchErrors = $state([]);
 	onMount(async () => {
 		try {
@@ -471,6 +578,88 @@
 		{/if}
 	</div>
 
+	<!-- Mode: Perfect loops (one button) vs Manual (every knob) -->
+	<div class="grid grid-cols-2 gap-1 text-xs">
+		<button class="px-2 py-1.5 rounded border {mode === 'perfect' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}" onclick={() => { mode = 'perfect'; plSave(); }}>✨ Perfect loops</button>
+		<button class="px-2 py-1.5 rounded border {mode === 'manual' ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}" onclick={() => { mode = 'manual'; plSave(); }}>🛠️ Manual</button>
+	</div>
+
+	{#if mode === 'perfect'}
+		<div class="rounded-lg border border-violet-200 bg-violet-50 p-2 space-y-2 text-xs">
+			<p class="text-[10px] text-violet-900">Pick the actions, press the button. The app frames the sprite, generates each clip with Wan 2.2, finds the frames that loop seamlessly, keys the background, matches the colours, crops the whole set to one canvas and saves it to your library. Each action is scored; aim for <b>perfect</b> or <b>good</b>.</p>
+
+			<div class="grid grid-cols-2 gap-2">
+				<label class="col-span-2">
+					<span class="text-[10px] text-violet-900 font-semibold">Who is this? (2–4 features, optional)</span>
+					<input type="text" bind:value={plSubject} onchange={plSave} placeholder="a knight in blue armor with a red plume and a round shield" class="w-full mt-0.5 px-2 py-1 border rounded" />
+				</label>
+				<label>
+					<span class="text-[10px] text-violet-900 font-semibold">View</span>
+					<select bind:value={plView} onchange={() => { plDefaults(); plSave(); }} class="w-full mt-0.5 px-1 py-1 border rounded">
+						<option value="front">Front / as drawn</option>
+						<option value="side">Side-scroller (profile →)</option>
+					</select>
+				</label>
+				<label>
+					<span class="text-[10px] text-violet-900 font-semibold">Set name</span>
+					<input type="text" bind:value={plName} onchange={plSave} placeholder={project.projectName || 'hero'} class="w-full mt-0.5 px-2 py-1 border rounded" />
+				</label>
+				{#if plView === 'side'}
+					<label class="col-span-2 flex items-center gap-1 text-[11px] text-violet-900">
+						<input type="checkbox" bind:checked={plReframe} onchange={plSave} class="w-3 h-3" />
+						Redraw the sprite in side profile first (+$0.04). Untick if it is already a profile facing right.
+					</label>
+				{/if}
+			</div>
+
+			<div class="space-y-1">
+				<div class="flex items-center justify-between">
+					<span class="text-[10px] text-violet-900 font-semibold">Actions</span>
+					<button class="text-[10px] text-violet-700 underline" onclick={() => { plDefaults(); plSave(); }}>default set</button>
+				</div>
+				{#each plGroups as group}
+					<div class="flex flex-wrap gap-1 items-center">
+						<span class="text-[10px] text-violet-700 w-14 shrink-0">{group}</span>
+						{#each plSets.filter((p) => p.group === group) as p (p.id)}
+							<button class="px-1.5 py-0.5 rounded border text-[10px] {plChecked.has(p.id) ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-violet-100'}" title={p.description} onclick={() => { plToggle(p.id); plSave(); }} disabled={plRunning}>
+								{p.name.replace(/^Side - /, '')}
+							</button>
+						{/each}
+					</div>
+				{/each}
+				<input type="text" bind:value={plCustom} placeholder="…or describe one more action in your own words" class="w-full px-2 py-1 border rounded text-[11px]" disabled={plRunning} />
+			</div>
+
+			<button class="w-full px-3 py-2 rounded bg-violet-600 text-white font-semibold hover:bg-violet-700 disabled:bg-gray-400" onclick={runPerfectLoops} disabled={plRunning || !project.firstFrame || (plChecked.size === 0 && !plCustom.trim())}>
+				{plRunning ? '⏳ Working…' : `✨ Make ${plChecked.size + (plCustom.trim() ? 1 : 0)} perfect loop${plChecked.size + (plCustom.trim() ? 1 : 0) === 1 ? '' : 's'} · ≈$${plCost.toFixed(2)}`}
+			</button>
+			{#if !project.firstFrame}<p class="text-[10px] text-violet-700">Upload or pick a sprite above first.</p>{/if}
+			{#if plError}<p class="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">{plError}</p>{/if}
+
+			{#if plProgress && (plRunning || plResults.length)}
+				<div class="space-y-1">
+					{#if plRunning}<p class="text-[10px] text-violet-900">{plProgress.message || 'Working…'}</p>{/if}
+					{#each plProgress.actions || [] as a (a.id)}
+						<div class="flex items-center gap-2 bg-white rounded border border-violet-100 px-2 py-1">
+							{#if a.thumbnailUrl}<img src={a.thumbnailUrl} alt="" class="w-6 h-6 object-contain" style="image-rendering: pixelated" />{:else}<span class="w-6 h-6 inline-block"></span>{/if}
+							<span class="flex-1 truncate">{a.name}</span>
+							{#if a.loop}
+								<span class="text-[10px] font-mono text-gray-500" title="seam ÷ median frame step">{a.loop.ratio}</span>
+								<span class="text-[10px] text-white px-1.5 rounded {PL_VERDICT[a.loop.verdict] || 'bg-gray-500'}">{a.loop.verdict}</span>
+							{/if}
+							{#if a.touchesEdge}<span class="text-[10px] text-amber-700" title="A limb reached the crop edge in some frame">⚠ edge</span>{/if}
+							{#if a.status === 'failed'}<span class="text-[10px] text-red-700" title={a.error}>failed</span>
+							{:else if a.status === 'done'}
+								<button class="text-[10px] text-violet-700 underline" onclick={() => loadResult(a)}>open</button>
+							{:else if a.status !== 'pending'}<span class="text-[10px] text-violet-700">{a.status}…</span>{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
+	{#if mode === 'manual'}
 	<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-2">
 		<p class="text-xs font-semibold text-gray-700">🎬 Animation Setup</p>
 		<div class="hidden">
@@ -848,6 +1037,7 @@
 
 	{#if generationError}
 		<p class="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">{generationError}</p>
+	{/if}
 	{/if}
 </div>
 

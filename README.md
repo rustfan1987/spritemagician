@@ -46,6 +46,15 @@ Other scripts:
 | `npm run electron:dev` | Build, then launch the Electron desktop window |
 | `npm run electron:build` | Build installers into `dist/` with electron-builder |
 
+## Perfect loops in one click
+
+Open **2D → Animate**, drop a sprite, pick the actions and press **Make perfect loops**. The app frames
+the sprite on a green canvas, generates each clip with Wan 2.2, finds the two frames that loop seamlessly
+(or anchors one-shots to the start pose), keys the background, matches the colours back to the sprite,
+scores the seam, crops the whole set to one shared canvas and files everything under `Characters/`.
+Side-scroller sets can redraw a front-facing sprite in profile first. The **Characters** tab does the
+same for a saved character with one seed for every action. Requires [ffmpeg](https://ffmpeg.org) on PATH.
+
 ## Batch animations from the command line
 
 `scripts/animate.mjs` turns one sprite into a set of looping animations (jump, hit, run,
