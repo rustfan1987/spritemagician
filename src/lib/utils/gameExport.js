@@ -172,6 +172,24 @@ export async function buildGameSheet(frames, opts = {}) {
 	return { blob, width, height, cell, columns, rows, frames: rects, aseprite, godot, unity, trim: trim ? crop : null };
 }
 
+/** Update every metadata reference after the library chooses the image filename. */
+export function relinkGameSheet(sheet, imageName) {
+	if (typeof imageName !== 'string' || !imageName || /[\\/"\r\n]/.test(imageName)) {
+		throw new Error('Saved sprite sheet has an invalid filename');
+	}
+	const oldName = sheet.aseprite.meta.image;
+	const oldPath = `path="res://${oldName}"`;
+	if (sheet.unity.texture !== oldName || !sheet.godot.includes(oldPath)) {
+		throw new Error('Game pack image references are inconsistent');
+	}
+	return {
+		...sheet,
+		aseprite: { ...sheet.aseprite, meta: { ...sheet.aseprite.meta, image: imageName } },
+		unity: { ...sheet.unity, texture: imageName },
+		godot: sheet.godot.replace(oldPath, `path="res://${imageName}"`)
+	};
+}
+
 /** Build a human-readable README for the pack. */
 export function packReadme(name, sheet) {
 	return [

@@ -4,10 +4,10 @@
 	import { generateGif } from '$lib/utils/gifEncoder.js';
 	import { generateMp4 } from '$lib/utils/mp4Encoder.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/library/client.js';
+	import { createFile, getItem } from '$lib/library/client.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
-	import { buildGameSheet, packReadme } from '$lib/utils/gameExport.js';
+	import { buildGameSheet, packReadme, relinkGameSheet } from '$lib/utils/gameExport.js';
 	import { cropToAnimationBounds } from '$lib/utils/animationBounds.js';
 	
 	let project = $state({ frames: [], fps: 12 });
@@ -123,11 +123,14 @@
 			});
 			const uploaded = await upload.json();
 			if (!upload.ok) throw new Error(uploaded.error || 'Upload failed');
-			await createFile('local', folderId, `${name}.png`, uploaded.url, 'image', { source: 'game-pack', frameCount: sheet.frames.length, cell: sheet.cell });
-			await createFile('local', folderId, `${name}.json`, textToDataUrl(JSON.stringify(sheet.aseprite, null, 2)), 'file', { source: 'game-pack' });
-			await createFile('local', folderId, `${name}.tres`, textToDataUrl(sheet.godot, 'text/plain'), 'file', { source: 'game-pack' });
-			await createFile('local', folderId, `${name}.unity.json`, textToDataUrl(JSON.stringify(sheet.unity, null, 2)), 'file', { source: 'game-pack' });
-			gamePackNote = `Saved ${name}.png + metadata to your library folder.`;
+			const imageId = await createFile('local', folderId, `${name}.png`, uploaded.url, 'image', { source: 'game-pack', frameCount: sheet.frames.length, cell: sheet.cell });
+			const imageItem = await getItem('local', imageId);
+			if (!imageItem?.name) throw new Error('Saved sprite sheet could not be read back');
+			const linked = relinkGameSheet(sheet, imageItem.name);
+			await createFile('local', folderId, `${name}.json`, textToDataUrl(JSON.stringify(linked.aseprite, null, 2)), 'file', { source: 'game-pack' });
+			await createFile('local', folderId, `${name}.tres`, textToDataUrl(linked.godot, 'text/plain'), 'file', { source: 'game-pack' });
+			await createFile('local', folderId, `${name}.unity.json`, textToDataUrl(JSON.stringify(linked.unity, null, 2)), 'file', { source: 'game-pack' });
+			gamePackNote = `Saved ${imageItem.name} + metadata to your library folder.`;
 		} catch (err) {
 			gamePackNote = err.message || 'Save failed';
 		} finally {
