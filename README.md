@@ -53,7 +53,8 @@ the sprite on a green canvas, generates each clip with Wan 2.2, finds the two fr
 (or anchors one-shots to the start pose), keys the background, matches the colours back to the sprite,
 scores the seam, crops the whole set to one shared canvas and files everything under `Characters/`.
 Side-scroller sets can redraw a front-facing sprite in profile first. The **Characters** tab does the
-same for a saved character with one seed for every action. Requires [ffmpeg](https://ffmpeg.org) on PATH.
+same for a saved character with one seed for every action. ffmpeg is bundled with the installer; a source checkout
+uses `ffmpeg` from PATH if present, otherwise the copy that `npm install` brings in (ffmpeg-static, GPL build).
 
 ## Batch animations from the command line
 

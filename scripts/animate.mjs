@@ -300,9 +300,11 @@ async function generate(canvasPng, prompt, seed, { anchor = ANCHOR } = {}) {
 }
 
 // ── step 4–5: frames + window ────────────────────────────────────────────────
+let FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
+try { execFileSync(FFMPEG, ['-version'], { stdio: 'ignore' }); } catch { FFMPEG = (await import('ffmpeg-static')).default; } // bundled fallback
 function extractAllFrames(videoPath, dir) {
 	fs.mkdirSync(dir, { recursive: true });
-	execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', videoPath, '-vsync', '0', path.join(dir, 'f_%04d.png')]);
+	execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', videoPath, '-vsync', '0', path.join(dir, 'f_%04d.png')]);
 	return fs.readdirSync(dir).filter((f) => f.startsWith('f_')).sort().map((f) => path.join(dir, f));
 }
 /**
@@ -580,7 +582,7 @@ async function writeSeamStrip(pngs, outPath, k = 3) {
 }
 function writeGif(framesDir, fps, outGif) {
 	// palette pass keeps transparency crisp
-	execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', path.join(framesDir, 'k_%04d.png'),
+	execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', path.join(framesDir, 'k_%04d.png'),
 		'-vf', 'split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128', '-loop', '0', outGif]);
 }
 

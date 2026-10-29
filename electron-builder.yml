@@ -18,6 +18,7 @@ asarUnpack:
   - build/**
   - node_modules/sharp/**
   - node_modules/@img/**
+  - node_modules/ffmpeg-static/**
 win:
   target:
     - nsis

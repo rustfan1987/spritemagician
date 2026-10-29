@@ -10,6 +10,6 @@ export default defineConfig({
 		noExternal: true,
 		// sharp is a native module (libvips); it cannot be bundled and is
 		// shipped in node_modules instead (see electron-builder.yml).
-		external: ['sharp']
+		external: ['sharp', 'ffmpeg-static']
 	}
 });

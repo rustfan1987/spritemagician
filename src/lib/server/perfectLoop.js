@@ -72,11 +72,33 @@ export function resolveAction(spec) {
 }
 
 // ───────────────────────────────────────────────────────────── ffmpeg ───
-function ffmpegBin() {
-	return process.env.FFMPEG_PATH || 'ffmpeg';
+/**
+ * ffmpeg lookup order: FFMPEG_PATH → `ffmpeg` on PATH → the binary shipped
+ * with the app (ffmpeg-static, unpacked next to the asar in the installer).
+ * Resolved once; `ffmpegAvailable()` reports which one is in use.
+ */
+let resolvedFfmpeg;
+function works(bin) {
+	try { execFileSync(bin, ['-version'], { stdio: 'ignore' }); return true; } catch { return false; }
 }
-export function ffmpegAvailable() {
-	try { execFileSync(ffmpegBin(), ['-version'], { stdio: 'ignore' }); return true; } catch { return false; }
+async function bundledFfmpeg() {
+	try {
+		const mod = await import('ffmpeg-static');
+		const p = String(mod.default || mod || '').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
+		return p && fs.existsSync(p) ? p : null;
+	} catch { return null; }
+}
+export async function resolveFfmpeg() {
+	if (resolvedFfmpeg !== undefined) return resolvedFfmpeg;
+	const candidates = [process.env.FFMPEG_PATH, 'ffmpeg', await bundledFfmpeg()].filter(Boolean);
+	resolvedFfmpeg = candidates.find(works) || null;
+	return resolvedFfmpeg;
+}
+function ffmpegBin() {
+	return resolvedFfmpeg || process.env.FFMPEG_PATH || 'ffmpeg';
+}
+export async function ffmpegAvailable() {
+	return !!(await resolveFfmpeg());
 }
 function extractAllFrames(videoPath, dir) {
 	fs.mkdirSync(dir, { recursive: true });
@@ -341,7 +363,7 @@ export async function runPerfectLoopJob(o) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-loop-'));
 	try {
 		if (!actions.length) throw new Error('Pick at least one action');
-		if (!ffmpegAvailable()) throw new Error('ffmpeg was not found. Install it (https://ffmpeg.org) and make sure it is on PATH, then try again.');
+		if (!(await ffmpegAvailable())) throw new Error('ffmpeg was not found. Install it (https://ffmpeg.org) and make sure it is on PATH, then try again.');
 		publish({ status: 'processing' });
 		let cutout = await ensureCutout(await loadSourceBuffer(o.image), log);
 		if (view === 'side' && o.reframe) cutout = await ensureCutout(await reframeToSide(cutout, log), log);
